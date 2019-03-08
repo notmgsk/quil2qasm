@@ -6,6 +6,6 @@
   :license  "Specify license here"
   :version "0.0.1"
   :serial t
-  :depends-on (#:alexa #:parse-float)
+  :depends-on (#:alexa #:parse-float #:cl-quil)
   :components ((:file "package")
                (:file "quil2qasm")))
