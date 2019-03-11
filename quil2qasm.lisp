@@ -34,8 +34,10 @@ measure a[1] -> c3[1];
 // quantum teleportation example
 OPENQASM 2.0;
 include \"test.quil\";
+qreg p[3];
 qreg q[3];
 creg c0[1];
+measure q[1] -> c0[0];
 ")
 
 (deftype qasm-keywords ()
@@ -213,9 +215,10 @@ creg c0[1];
        (parse-include tok-lines))
 
       ((:QREG)
-       (values (make-instance 'quil::no-operation)
-               (rest tok-lines)))
+       (parse-qreg tok-lines))
 
+      ;; creg name[size]; defines a classical memory register. In Quil
+      ;; it maps to a declared memory register of BITs.
       ((:CREG)
        (parse-creg tok-lines))
 
@@ -272,10 +275,37 @@ creg c0[1];
                                (length :NNINTEGER) (_ :RIGHT-SQUARE-BRACKET)
                                (_ :SEMI-COLON))
         creg-line
-      (values (quil::make-memory-descriptor :name (token-payload name)
-                                            :type quil::quil-bit
-                                            :length (token-payload length))
-              (rest tok-lines)))))
+      (let ((name (token-payload name))
+            (length (token-payload length)))
+        (setf (gethash name *creg-names*) length)
+        (values (quil::make-memory-descriptor :name name
+                                              :type quil::quil-bit
+                                              :length length)
+                (rest tok-lines))))))
+
+(defun parse-qreg (tok-lines)
+  (when (null tok-lines)
+    (q2q-parse-error "Unexpectedly reached end of program, expecting qreg."))
+
+  (let ((qreg-line (first tok-lines)))
+    (destructuring-token-bind ((_ :QREG) (name :ID) (_ :LEFT-SQUARE-BRACKET)
+                               (length :NNINTEGER) (_ :RIGHT-SQUARE-BRACKET)
+                               (_ :SEMI-COLON))
+        qreg-line
+      (let ((name (token-payload name))
+            (length (token-payload length)))
+        ;; While a qreg doesn't directly map to a quil instruction, we
+        ;; do need to keep track of named qubit registers so that we
+        ;; can properly translate instructions that reference qubit
+        ;; registers.
+        ;;
+        ;; e.g. the translation of "measure q[3] -> r[0];" might
+        ;; simply be "MEASURE 3 r[0]". But what about "measure q[3] ->
+        ;; r[0]; measure p[3] -> r[1];"? In OpenQASM the qubits "q[3]"
+        ;; and "p[3]" are not the same. 
+        (setf (gethash name *qreg-names*) (list *qubit-count* length))
+        (incf *qubit-count* length)
+        (nop tok-lines)))))
 
 (defun parse-include (tok-lines)
   (when (null tok-lines)
@@ -289,12 +319,38 @@ creg c0[1];
       (values (make-instance 'quil::include :pathname (token-payload path-tok))
               (rest tok-lines)))))
 
+(defun %qreg-to-qubit (qreg qreg-index)
+  (destructuring-bind (offset size)
+      (gethash qreg *qreg-names*)
+    (assert (< qreg-index size) ()
+            "The index ~s is out-of-bounds for qreg ~s"
+            qreg-index qreg)
+    (quil::qubit (+ offset qreg-index))))
+
+(defun %creg-to-address (creg creg-index)
+  (quil::mref creg creg-index))
+
+
+(defparameter *creg-names* (make-hash-table :test #'equal)
+  "Maps a creg name to its size.")
+
+(defparameter *qreg-names* (make-hash-table :test #'equal)
+  "Maps a qreg name to the pair (offset . size). A qreg defined with
+  `qreg q[size];` maps to Quil qubits (offset, offset + 1, offset + 2,
+  ..., offset + size - 1). This complication maintains unique qubits
+  in the Quil translation.")
+
+(defparameter *qubit-count* 0
+  "The number of qubits registered by qreg.")
+
 (defun qasm2quil (string)
   "Parse a string STRING into a raw, untransformed PARSED-PROGRAM object."
   (check-type string string)
   (let* ((tok-lines (tokenize string)))
     (let ((parsed-program nil)
-          (*memory-region-names* nil))
+          (*creg-names* (make-hash-table :test #'equal))
+          (*qreg-names* (make-hash-table :test #'equal))
+          (*qubit-count* 0))
       (loop :named parse-loop
             :until (null tok-lines) :do
               (multiple-value-bind (program-entity rest-toks)
