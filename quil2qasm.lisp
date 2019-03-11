@@ -185,9 +185,14 @@ creg c0[1];
 (defun q2q-parse-error (format-control &rest format-args)
   "Signal a Q2Q-PARSE-ERROR with a descriptive error message described by FORMAT-CONTROL and FORMAT-ARGS."
   (error 'q2q-parse-error :format-control format-control
-                          :format-arguments format-args))
+         :format-arguments format-args))
 
-(defun parse-program-lines (tok-lines &key (require-openqasm-line t))
+(declaim (inline nop))
+(defun nop (tok-lines)
+  (values (make-instance 'quil::no-operation)
+          (rest tok-lines)))
+
+(defun parse-program-lines (tok-lines)
   "Parse the next AST object from the list of token lists. Returns two values:
 
 1. The next AST object.
@@ -199,8 +204,7 @@ creg c0[1];
     (case tok-type
       ;; The OPENQASM line is uninteresting. Return the remaining lines.
       ((:OPENQASM)
-       (values (make-instance 'quil::no-operation)
-               (rest tok-lines)))
+       (nop tok-lines))
 
       ;; TODO What to do for an include? Parse the file and splice in
       ;; the results? If so, probably leave a comment saying where it
@@ -214,6 +218,25 @@ creg c0[1];
 
       ((:CREG)
        (parse-creg tok-lines))
+
+      ;; barrier
+      ;; commuting blocks??
+      ((:BARRIER)
+       (nop tok-lines))
+
+      ;; Quil's DEFGATEs are specified as a matrix, whereas QASM's are
+      ;; specified as a list of built-in gates. i.e. more like Quil's
+      ;; DEFCIRCUIT? In any case this is not going to be a simple
+      ;; translation.
+      ((:GATE)
+       (nop tok-lines))
+
+
+      ((:RESET)
+       (nop tok-lines))
+
+      ((:OPAQUE)
+       (nop tok-lines))
       
       (otherwise
        (q2q-parse-error "Got an unexpected token of type ~S ~
