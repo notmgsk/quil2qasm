@@ -234,6 +234,8 @@ measure q[1] -> c0[0];
       ((:GATE)
        (nop tok-lines))
 
+      ((:MEASURE)
+       (parse-measure tok-lines))
 
       ((:RESET)
        (nop tok-lines))
@@ -339,6 +341,21 @@ measure q[1] -> c0[0];
 (defun %creg-to-address (creg creg-index)
   (quil::mref creg creg-index))
 
+(defun parse-measure (tok-lines)
+  (when (null tok-lines)
+    (q2q-parse-error "Unexpectedly reached end of program, expecting measure."))
+  (let ((include-line (first tok-lines)))
+    (destructuring-token-bind ((_ :MEASURE) (qreg :ID) (_ :LEFT-SQUARE-BRACKET)
+                               (qreg-index :NNINTEGER) (_ :RIGHT-SQUARE-BRACKET)
+                               (_ :ARROW) (creg :ID) (_ :LEFT-SQUARE-BRACKET)
+                               (creg-index :NNINTEGER) (_ :RIGHT-SQUARE-BRACKET)
+                               (_ :SEMI-COLON))
+        include-line
+      (values (make-instance 'quil::measure :address (%creg-to-address (token-payload creg)
+                                                                       (token-payload creg-index))
+                                            :qubit (%qreg-to-qubit (token-payload qreg)
+                                                                   (token-payload qreg-index)))
+              (rest tok-lines)))))
 
 (defparameter *creg-names* (make-hash-table :test #'equal)
   "Maps a creg name to its size.")
