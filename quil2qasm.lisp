@@ -103,6 +103,8 @@ creg c0[1];
    (return (tok :RIGHT-ANGLE-BRACKET)))
   ((eager "\\,")
    (return (tok :COMMA)))
+  ((eager "->")
+   (return (tok :ARROW)))
   ("OPENQASM|qreg|creg|barrier|measure|reset|opaque|include"
    (return (tok (intern (string-upcase $@) :keyword))))
   ("\\+" (return (tok :PLUS)))
