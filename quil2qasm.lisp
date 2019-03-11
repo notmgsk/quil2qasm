@@ -246,6 +246,15 @@ measure q[1] -> c0[0];
                          when trying to parse a program." tok-type)))))
 
 (defmacro destructuring-token-bind (token-idents token-line &body body)
+  ;; TODO Throw some lib-specific condition if destructuring-bind
+  ;; fails.
+  ;;
+  ;; TODO Allow for "fall-through" cases. i.e. if the first
+  ;; TOKEN-IDENTS doesn't match, try the next one, etc. I'm thinking
+  ;; this might be helpful when matching `measure a -> b` vs `measure
+  ;; a[0] -> b[0]`.
+  ;;
+  ;; TODO I wrote this while very tired. Untested.
   (let ((ts (mapcar #'alexandria:ensure-list (remove '_ token-idents))))
     `(progn
        (unless (= ,(length token-idents) (length ,token-line))
