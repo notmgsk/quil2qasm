@@ -12,7 +12,7 @@ creg c0[1];
 creg c1[1];
 creg c2[1];
 // optional post-rotation for state tomography
-gate post q { 
+gate post q {
 }
 u3(0.3,0.2,0.1) q[0];
 h q[1];
@@ -41,7 +41,10 @@ measure q[1] -> c0[0];
 ")
 
 (deftype qasm-keywords ()
-  '(member :OPENQASM :QREG :CREG :GATE :BARRIER :MEASURE :RESET :OPAQUE :INCLUDE))
+  '(member
+    :OPENQASM :QREG :CREG :GATE :BARRIER
+    :MEASURE :RESET :OPAQUE :INCLUDE
+    :IF :CX :U))
 
 (deftype token-type ()
   '(or
@@ -208,9 +211,6 @@ measure q[1] -> c0[0];
       ((:OPENQASM)
        (nop tok-lines))
 
-      ;; TODO What to do for an include? Parse the file and splice in
-      ;; the results? If so, probably leave a comment saying where it
-      ;; came from.      
       ((:INCLUDE)
        (parse-include tok-lines))
 
@@ -242,7 +242,10 @@ measure q[1] -> c0[0];
 
       ((:OPAQUE)
        (nop tok-lines))
-      
+
+      ((:ID)
+       (parse-application tok-lines))
+
       (otherwise
        (q2q-parse-error "Got an unexpected token of type ~S ~
                          when trying to parse a program." tok-type)))))
@@ -276,6 +279,45 @@ measure q[1] -> c0[0];
                  :unless (eql tok-name '_)
                    :collect tok)
          ,@body))))
+
+(defun parse-expression-list (tok-line)
+  (when (null tok-line)
+    (q2q-parse-error "Unexpectedly reached end of program, expecting expression list."))
+
+  ;; (a, b, c) q1, q2, q3 ==> '((a b c) (q1, q2, q3))
+  (destructuring-bind (params-line &rest rest)
+      ;; ugly but whatever
+      (list (rest (subseq tok-line 0 (position ':RIGHT-PAREN tok-line :from-end t :key 'token-type)))
+            (subseq tok-line (1+ (position ':RIGHT-PAREN tok-line :from-end t :key 'token-type))))
+    (let ((params (split-sequence:split-sequence ':COMMA params-line
+                                                 :key 'token-type)))
+      (list params rest))))
+
+(defun parse-qubits-list (tok-line)
+  (when (null tok-line)
+    (q2q-parse-error "Unexpectedly reached end of program, expecting qubit list."))
+
+  (let ((qubits (mapcar #'first (split-sequence:split-sequence ':COMMA tok-line :key 'token-type))))
+    (unless (every (lambda (q) (eql ':ID (token-type q))) qubits)
+      (q2q-parse-error "Expected some qubits"))
+    qubits))
+
+(defun parse-application (tok-lines)
+  (when (null tok-lines)
+    (q2q-parse-error "Unexpectedly reached end of program, expecting gate application."))
+
+  (let* ((application-line (first tok-lines)))
+    (unless (eql ':SEMI-COLON (token-type (first (last application-line))))
+      (q2q-parse-error "Missing semi-colon"))
+
+    (destructuring-bind (name &rest rest)
+        (butlast application-line)
+      (destructuring-bind (expression-list rest-of-line)
+          (parse-expression-list rest)
+        (let ((qubit-list (parse-qubits-list (first rest-of-line))))
+          )))))
+
+;; u1(alpha) qubit;
 
 (defun parse-creg (tok-lines)
   (when (null tok-lines)
@@ -313,14 +355,14 @@ measure q[1] -> c0[0];
         ;; e.g. the translation of "measure q[3] -> r[0];" might
         ;; simply be "MEASURE 3 r[0]". But what about "measure q[3] ->
         ;; r[0]; measure p[3] -> r[1];"? In OpenQASM the qubits "q[3]"
-        ;; and "p[3]" are not the same. 
+        ;; and "p[3]" are not the same.
         (setf (gethash name *qreg-names*) (list *qubit-count* length))
         (incf *qubit-count* length)
         (nop tok-lines)))))
 
 (defun parse-include (tok-lines)
   (when (null tok-lines)
-    (q2q-parse-error "Unexpectedly reached end of program, expecting INCLUDE."))
+    (q2q-parse-error "Unexpectedly reached end of program, expecting include."))
 
   (let ((include-line (first tok-lines)))
     (destructuring-token-bind ((_ :INCLUDE)
@@ -369,8 +411,8 @@ measure q[1] -> c0[0];
 (defparameter *qubit-count* 0
   "The number of qubits registered by qreg.")
 
-(defun qasm2quil (string)
-  "Parse a string STRING into a raw, untransformed PARSED-PROGRAM object."
+(defun parse-qasm (string)
+  "Parse STRING into a raw, untransformed PARSED-PROGRAM object."
   (check-type string string)
   (let* ((tok-lines (tokenize string)))
     (let ((parsed-program nil)
@@ -392,3 +434,12 @@ measure q[1] -> c0[0];
                        :circuit-definitions circ-defs
                        :memory-definitions memory-defs
                        :executable-code (coerce exec-code 'simple-vector))))))
+
+(defun parse-qasm-string (string &optional originating-file)
+  "Parse STRING into a PARSED-PROGRAM object, applying all transforms."
+  (let ((pp (parse-qasm string)))
+    (setf pp (quil::transform 'quil::process-includes pp originating-file))
+    (setf pp (quil::transform 'quil::resolve-applications pp))
+    (setf pp (quil::transform 'quil::expand-circuits pp))
+    (setf pp (quil::transform 'quil::type-check pp))
+    (setf pp (quil::transform 'quil::patch-labels pp))))
